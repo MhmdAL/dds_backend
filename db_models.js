@@ -10,6 +10,10 @@ const init_models = function (sequelize) {
         autoIncrement: true,
         primaryKey: true,
       },
+      drone_id: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+      },
       source_station_id: {
         type: DataTypes.INTEGER,
         allowNull: false,
@@ -61,7 +65,39 @@ const init_models = function (sequelize) {
     }
   );
 
-  return { missions, stations }
+  class drones extends Model {}
+  drones.init(
+    {
+      id: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        autoIncrement: true,
+        primaryKey: true,
+      },
+      ip: {
+        type: DataTypes.STRING,
+        allowNull: false
+      },
+      lat: {
+        type: DataTypes.DECIMAL,
+        allowNull: false,
+      },
+      lng: {
+        type: DataTypes.DECIMAL,
+        allowNull: false,
+      },
+      is_occupied: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+      }
+    },
+    {
+      sequelize,
+      modelName: "drones",
+    }
+  );
+
+  return { missions, stations, drones }
 };
 
 exports.init_models = init_models

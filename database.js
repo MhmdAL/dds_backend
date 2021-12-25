@@ -6,7 +6,7 @@ const sequelize = new Sequelize(
   "postgres://postgres:postgres@localhost:5432/dds_db"
 );
 
-const { missions, stations } = db_models.init_models(sequelize);
+const { missions, stations, drones } = db_models.init_models(sequelize);
 
 try {
   sequelize.authenticate();
@@ -17,4 +17,4 @@ try {
 
 sequelize.sync();
 
-module.exports = { sequelize, missions, stations };
+module.exports = { sequelize, missions, stations, drones };
