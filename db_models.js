@@ -50,6 +50,10 @@ const init_models = function (sequelize) {
         autoIncrement: true,
         primaryKey: true,
       },
+      name: {
+        type: DataTypes.STRING,
+        allowNull: false
+      },
       lat: {
         type: DataTypes.DECIMAL,
         allowNull: false,

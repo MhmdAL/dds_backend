@@ -1,12 +1,16 @@
 const { stations } = require("../database");
 
 const createStation = async (req, res) => {
-  const station = await stations.create({
-    lat: req.body.lat,
-    lng: req.body.lng,
-  });
+  const station = await stations.create(req.body);
 
   res.json(station);
 };
 
-module.exports = { createStation };
+const getStations = async (req, res) => {
+  const response = await stations.findAll()
+  console.log(response)
+
+  res.json({ data: response } );
+};
+
+module.exports = { createStation, getStations };

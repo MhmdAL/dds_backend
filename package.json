@@ -10,9 +10,11 @@
   "license": "ISC",
   "dependencies": {
     "amqplib": "^0.8.0",
+    "async-mqtt": "^2.6.1",
     "axios": "^0.24.0",
     "cors": "^2.8.5",
     "express": "^4.17.1",
+    "mqtt": "^4.3.4",
     "pg": "^8.7.1",
     "pg-hstore": "^2.3.4",
     "pg-promise": "^10.11.1",

@@ -13,7 +13,7 @@ const port = 3001;
 app.use(express.json()); // for parsing application/json
 app.use(cors());
 
-amqp.connect("amqp://localhost", function (error0, connection) {
+amqp.connect("amqp://localhost:5672", function (error0, connection) {
   if (error0) {
     throw error0;
   }
@@ -43,6 +43,7 @@ app.get("/mission", mission_controller.getMission);
 app.post("/ack_package_loaded", mission_controller.acknowledgeLoad);
 app.post("/ack_package_received", mission_controller.acknowledgeReceipt);
 
+app.get("/station", station_controller.getStations);
 app.post("/station", station_controller.createStation);
 
 app.post("/drone", drone_controller.createDrone);
