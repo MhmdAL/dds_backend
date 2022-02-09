@@ -1,8 +1,9 @@
-const { missions, drones, stations } = require("../database");
+const { missions, drones, stations } = require("../db_models").models;
 const axios = require("axios");
-var amqp = require("amqplib/callback_api");
-const { response } = require("express");
 const mqtt = require("mqtt");
+const fs = require("fs");
+const path = require("path");
+const { Op } = require("sequelize/dist");
 
 const options = {
   clean: true,
@@ -11,17 +12,21 @@ const options = {
   username: "emqx_test",
   password: "emqx_test",
 };
-const client = mqtt.connect("mqtt://broker.emqx.io:1883", options);
+
+const client = mqtt.connect("mqtt://localhost:2883", options);
+
 client.on("connect", function () {
   console.log("Connected");
 
   client.subscribe("mission-status-update");
+  client.subscribe("drone-location-request-ack");
+  client.subscribe("drone-landed");
 });
 
 client.on("message", async function (topic, message) {
   console.log(message.toString());
 
-  data = JSON.parse(message)
+  data = JSON.parse(message);
 
   if (topic == "mission-status-update") {
     console.log(data.status);
@@ -35,106 +40,98 @@ client.on("message", async function (topic, message) {
         },
       }
     );
+  } else if (topic == "drone-location-request-ack") {
+    onDroneLocationDiscovered(data);
+  } else if (topic == "drone-landed") {
+    onDroneLanded(data);
   }
 });
-
-async function getDroneControllerUrl(mission_id) {
-  const mission = await missions.findOne({
-    where: {
-      id: mission_id,
-    },
-  });
-
-  const drone = await drones.findOne({
-    where: {
-      id: mission.drone_id,
-    },
-  });
-
-  return `http://${drone.ip}:8000`;
-}
-
-const homePosition = { x: 0, y: 0 };
 
 function getPathBetween(source, dest) {
   // do some pathfinding magic to find movements
   return [{ x: dest.x - source.x, y: dest.y - source.y }];
 }
 
-function getDroneMovements(home, source, dest) {
-  const homeToSource = getPathBetween(home, source);
-  const sourceToDest = getPathBetween(source, dest);
-  const destToHome = getPathBetween(dest, home);
+async function generateFlightPlan(fromStationId, toStationId) {
+  const toStation = await stations.findByPk(toStationId);
 
-  return { hts: homeToSource, std: sourceToDest, dth: destToHome };
+  let file = "plan.txt";
+
+  const fpath = path.join(__dirname, file);
+  let data = fs.readFileSync(fpath, "utf8");
+
+  data = data.replace("{lat}", toStation.lat);
+  data = data.replace("{lng}", toStation.lng);
+  data = data.replace("{alt}", 2);
+
+  console.log(data);
+
+  return data;
 }
 
-async function generateDroneInstructions(sourceStationId, destStationId) {
-  const sourceStation = await stations.findOne({
-    where: {
-      id: sourceStationId,
-    },
-  });
-
-  const destStation = await stations.findOne({
-    where: {
-      id: destStationId,
-    },
-  });
-
-  return getDroneMovements(
-    homePosition,
-    { x: sourceStation.lat, y: sourceStation.lng },
-    { x: destStation.lat, y: destStation.lng }
-  );
+function publishMissionRequestEvent(flightPlan) {
+  client.publish("mission-request", JSON.stringify({ planText: flightPlan }));
 }
 
-function publishMissionRequestEvent(
-  mission,
-  drone_instructions,
-  src_station_id
-) {
-  var data = {
-    id: mission.id,
-    src_station_id: src_station_id,
-    homeToSourceInstructions: drone_instructions.hts,
-    sourceToDestInstructions: drone_instructions.std,
-    destToHomeInstructions: drone_instructions.dth,
+function publishDroneDiscoveryRequest(mission_id) {
+  const data = {
+    mission_id: mission_id,
   };
 
-  client.publish("mission-request", JSON.stringify(data));
-  // amqp.connect("amqp://localhost:5672", function (error0, connection) {
-  //   if (error0) {
-  //     throw error0;
-  //   }
-  //   connection.createChannel(function (error1, channel) {
-  //     if (error1) {
-  //       throw error1;
-  //     }
-  //     var queue = `mission-request-queue-${mission.drone_id}`;
+  client.publish("drone-location-request", JSON.stringify(data));
+}
 
-  //     var data = {
-  //       id: mission.id,
-  //       homeToSourceInstructions: drone_instructions.hts,
-  //       sourceToDestInstructions: drone_instructions.std,
-  //       destToHomeInstructions: drone_instructions.dth,
-  //     };
+async function onDroneLanded(data) {
+  console.log("drone landed");
+  const mission = await missions.findOne({
+    where: { mission_status: { [Op.not]: "completed" } },
+  });
 
-  //     channel.sendToQueue(queue, Buffer.from(JSON.stringify(data)));
-  //   });
-  // });
+  if (mission.mission_status == "heading_source") {
+    mission.mission_status = "awaiting_load";
+  } else if (mission.mission_status == "heading_dest") {
+    mission.mission_status = "awaiting_unload";
+  }
+
+  await mission.save();
+}
+
+async function onDroneLocationDiscovered(data) {
+  const mission = await missions.findOne({
+    where: { mission_status: { [Op.not]: "completed" } },
+  });
+
+  if (data.station_id == mission.source_station_id) {
+    console.log("drone is already at the source. no need to send it there");
+
+    mission.mission_status = "awaiting_load";
+    await mission.save();
+
+    return;
+  }
+
+  const flightPlan = generateFlightPlan(
+    data.station_id,
+    mission.source_station_id
+  );
+
+  publishMissionRequestEvent(flightPlan);
+
+  mission.mission_status = "heading_source";
+  mission.save();
 }
 
 const createMission = async (req, res) => {
-  const suitableDrone = await drones.findOne({
-    where: {
-      is_occupied: false,
-    },
+  const active_mission = await missions.findOne({
+    where: { mission_status: { [Op.not]: "completed" } },
   });
-
-  if (!suitableDrone) {
-    return res.json("No drone found; failed to start mission");
+  if (active_mission && active_mission != null) {
+    console.log("mission already in progress");
+    res.send("mission already in progress");
+    return;
   }
+
+  // const drone = await drones.findOne();
 
   const sourceStationId = req.body.source_station_id;
   const destStationId = req.body.dest_station_id;
@@ -145,47 +142,12 @@ const createMission = async (req, res) => {
     current_lat: "0",
     current_lng: "0",
     mission_status: "new_mission",
-    drone_id: suitableDrone.id,
+    drone_id: 999,
   });
 
-  const droneInstructions = await generateDroneInstructions(
-    sourceStationId,
-    destStationId
-  );
+  publishDroneDiscoveryRequest(mission.id);
 
-  publishMissionRequestEvent(mission, droneInstructions, sourceStationId);
-
-  res.send("ok");
-
-  // const response = await axios({
-  //   method: "post",
-  //   url: `${await getDroneControllerUrl(mission.id)}/start_mission`,
-  //   data: {
-  //     id: mission.id,
-  //     homeToSourceInstructions: droneInstructions.hts,
-  //     sourceToDestInstructions: droneInstructions.std,
-  //     destToHomeInstructions: droneInstructions.dth,
-  //   },
-  // });
-
-  // data = JSON.parse(response.data);
-
-  // if (data.success === true) {
-  //   await drones.update(
-  //     {
-  //       is_occupied: true,
-  //     },
-  //     {
-  //       where: {
-  //         id: suitableDrone.id,
-  //       },
-  //     }
-  //   );
-
-  //   res.json(mission);
-  // } else {
-  //   res.send("Failed to start mission");
-  // }
+  res.json({ id: mission.id });
 };
 
 const updateMission = (req, res) => {
@@ -207,45 +169,45 @@ const updateMission = (req, res) => {
 };
 
 const getMission = async (req, res) => {
-  const mission = await missions.findOne({
-    where: {
-      id: 1,
-    },
+  active_mission = await missions.findOne({
+    where: { mission_status: { [Op.not]: "completed" } },
   });
 
-  res.json({
-    current_lat: mission.current_lat,
-    current_lng: mission.current_lng,
-  });
+  if (active_mission != null) res.json(active_mission);
+  else res.json({})
 };
 
 const acknowledgeLoad = async (req, res) => {
-  // axios({
-  //   method: "post",
-  //   url: `${await getDroneControllerUrl(req.body.mission_id)}/package_loaded`,
-  // });
   console.log("acking load");
-  // client.publish("package-load-ack", JSON.stringify('ok'));
 
-  console.log(req.body.dest_station_id);
-  client.publish(
-    "mission-continue",
-    JSON.stringify({ dest_station_id: req.body.dest_station_id })
+  const mission = await missions.findOne({
+    where: { mission_status: { [Op.not]: "completed" } },
+  });
+
+  const flightPlan = generateFlightPlan(
+    mission.source_station_id,
+    mission.dest_station_id
   );
 
-  res.send("Ok");
+  publishMissionRequestEvent(flightPlan);
+
+  mission.mission_status = "heading_dest";
+  mission.save();
+
+  res.json({response: "Ok"});
 };
 
 const acknowledgeReceipt = async (req, res) => {
-  // axios({
-  //   method: "post",
-  //   url: `${await getDroneControllerUrl(req.body.mission_id)}/package_received`,
-  // });
-
   console.log("acking receive");
-  client.publish("package-receive-ack", JSON.stringify("ok"));
 
-  res.send("Ok");
+  const mission = await missions.findOne({
+    where: { mission_status: { [Op.not]: "completed" } },
+  });
+
+  mission.mission_status = "completed";
+  mission.save();
+
+  res.json({response: "Ok"});
 };
 
 const consumeMissionStatusUpdateEvent = async function (msg) {
@@ -279,4 +241,5 @@ module.exports = {
   acknowledgeLoad,
   acknowledgeReceipt,
   consumeMissionStatusUpdateEvent,
+  generateFlightPlan,
 };

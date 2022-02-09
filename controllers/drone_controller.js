@@ -1,4 +1,4 @@
-const { drones } = require("../database");
+const { drones } = require("../db_models.js").models;
 
 const createDrone = async (req, res) => {
   const drone = await drones.create(req.body);

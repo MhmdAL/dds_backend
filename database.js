@@ -1,20 +1,33 @@
 const db_models = require("./db_models");
 const { Sequelize } = require("sequelize");
-const { options } = require("pg/lib/defaults");
 
-const sequelize = new Sequelize(
-  "postgres://postgres:postgres@localhost:5432/dds_db"
+let sequelize = new Sequelize(
+  "postgres://postgres:postgres@localhost:5432/postgres"
 );
 
-const { missions, stations, drones } = db_models.init_models(sequelize);
+async function init() {
+  try {
+    await sequelize.query("CREATE DATABASE dds_db;");
+  } catch (e) {
+    console.log(`Failed to create db: ${e}`);
+  }
 
-try {
-  sequelize.authenticate();
-  console.log("Connection has been established successfully.");
-} catch (error) {
-  console.error("Unable to connect to the database:", error);
+  sequelize = new Sequelize(
+    "postgres://postgres:postgres@localhost:5432/dds_db"
+  );
+
+  try {
+    sequelize.authenticate();
+    console.log("Connection has been established successfully.");
+  } catch (error) {
+    console.error("Unable to connect to the database:", error);
+  }
+
+  db_models.init_models(sequelize);
+
+  sequelize.sync();
+
+  return sequelize;
 }
 
-sequelize.sync();
-
-module.exports = { sequelize, missions, stations, drones };
+module.exports = { init };

@@ -1,7 +1,10 @@
 const { DataTypes, Model } = require("sequelize");
 
+class missions extends Model {}
+class stations extends Model {}
+class drones extends Model {}
+
 const init_models = function (sequelize) {
-  class missions extends Model {}
   missions.init(
     {
       id: {
@@ -41,7 +44,6 @@ const init_models = function (sequelize) {
     }
   );
 
-  class stations extends Model {}
   stations.init(
     {
       id: {
@@ -52,7 +54,7 @@ const init_models = function (sequelize) {
       },
       name: {
         type: DataTypes.STRING,
-        allowNull: false
+        allowNull: false,
       },
       lat: {
         type: DataTypes.DECIMAL,
@@ -61,7 +63,7 @@ const init_models = function (sequelize) {
       lng: {
         type: DataTypes.DECIMAL,
         allowNull: false,
-      }
+      },
     },
     {
       sequelize,
@@ -69,7 +71,6 @@ const init_models = function (sequelize) {
     }
   );
 
-  class drones extends Model {}
   drones.init(
     {
       id: {
@@ -80,7 +81,7 @@ const init_models = function (sequelize) {
       },
       ip: {
         type: DataTypes.STRING,
-        allowNull: false
+        allowNull: false,
       },
       lat: {
         type: DataTypes.DECIMAL,
@@ -93,15 +94,14 @@ const init_models = function (sequelize) {
       is_occupied: {
         type: DataTypes.BOOLEAN,
         allowNull: false,
-      }
+      },
     },
     {
       sequelize,
       modelName: "drones",
     }
   );
-
-  return { missions, stations, drones }
 };
 
-exports.init_models = init_models
+module.exports.init_models = init_models;
+module.exports.models = { stations, missions, drones };

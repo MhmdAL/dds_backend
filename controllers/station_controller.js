@@ -1,4 +1,4 @@
-const { stations } = require("../database");
+const { stations } = require("../db_models").models;
 
 const createStation = async (req, res) => {
   const station = await stations.create(req.body);
