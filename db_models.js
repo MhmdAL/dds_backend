@@ -3,6 +3,7 @@ const { DataTypes, Model } = require("sequelize");
 class missions extends Model {}
 class stations extends Model {}
 class drones extends Model {}
+class users extends Model {}
 
 const init_models = function (sequelize) {
   missions.init(
@@ -37,6 +38,14 @@ const init_models = function (sequelize) {
         type: DataTypes.STRING,
         allowNull: false,
       },
+      sender_id: {
+        type: DataTypes.STRING,
+        allowNull: false
+      },
+      recepient_id: {
+        type: DataTypes.STRING,
+        allowNull: false
+      }
     },
     {
       sequelize,
@@ -101,7 +110,34 @@ const init_models = function (sequelize) {
       modelName: "drones",
     }
   );
+
+  users.init(
+    {
+      id: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        autoIncrement: true,
+        primaryKey: true,
+      },
+      fb_id: {
+        type: DataTypes.STRING,
+        allowNull: false,
+      },
+      name: {
+        type: DataTypes.STRING,
+        allowNull: false
+      },
+      rfid: {
+        type: DataTypes.STRING,
+        allowNull: false
+      }
+    },
+    {
+      sequelize,
+      modelName: "users",
+    }
+  )
 };
 
 module.exports.init_models = init_models;
-module.exports.models = { stations, missions, drones };
+module.exports.models = { stations, missions, drones, users };

@@ -1,4 +1,4 @@
-const { missions, drones, stations } = require("../db_models").models;
+const { missions, drones, stations, users } = require("../db_models").models;
 const axios = require("axios");
 const mqtt = require("mqtt");
 const fs = require("fs");
@@ -13,7 +13,7 @@ const options = {
   password: "emqx_test",
 };
 
-const client = mqtt.connect("mqtt://localhost:2883", options);
+const client = mqtt.connect("mqtt://broker.emqx.io:1883", options);
 
 client.on("connect", function () {
   console.log("Connected");
@@ -62,9 +62,7 @@ async function generateFlightPlan(fromStationId, toStationId) {
 
   data = data.replace("{lat}", toStation.lat);
   data = data.replace("{lng}", toStation.lng);
-  data = data.replace("{alt}", 2);
-
-  console.log(data);
+  data = data.replace("{alt}", 3);
 
   return data;
 }
@@ -79,6 +77,14 @@ function publishDroneDiscoveryRequest(mission_id) {
   };
 
   client.publish("drone-location-request", JSON.stringify(data));
+}
+
+async function updateStations(data) {
+  const senderUser = await users.findByPk(data.sender_id)
+  const recipientUser = await users.findByPk(data.sender_id)
+
+  client.publish(`station-update-${data.source_station_id}`, JSON.stringify({ expectedRfid: senderUser.rfid, stationType: 0 }))
+  client.publish(`station-update-${data.dest_station_id}`, JSON.stringify({ expectedRfid: recipientUser.rfid, stationType: 1 }))
 }
 
 async function onDroneLanded(data) {
@@ -101,6 +107,8 @@ async function onDroneLocationDiscovered(data) {
     where: { mission_status: { [Op.not]: "completed" } },
   });
 
+  console.log('drone found!!')
+
   if (data.station_id == mission.source_station_id) {
     console.log("drone is already at the source. no need to send it there");
 
@@ -110,7 +118,7 @@ async function onDroneLocationDiscovered(data) {
     return;
   }
 
-  const flightPlan = generateFlightPlan(
+  const flightPlan = await generateFlightPlan(
     data.station_id,
     mission.source_station_id
   );
@@ -122,6 +130,8 @@ async function onDroneLocationDiscovered(data) {
 }
 
 const createMission = async (req, res) => {
+  const user = await users.findOne({ where: { fb_id: req.authenticatedUser.uid } })
+
   const active_mission = await missions.findOne({
     where: { mission_status: { [Op.not]: "completed" } },
   });
@@ -131,10 +141,10 @@ const createMission = async (req, res) => {
     return;
   }
 
-  // const drone = await drones.findOne();
-
   const sourceStationId = req.body.source_station_id;
   const destStationId = req.body.dest_station_id;
+  const senderId = user.id;
+  const recepientId = req.body.recepient_id;
 
   const mission = await missions.create({
     source_station_id: sourceStationId,
@@ -142,10 +152,14 @@ const createMission = async (req, res) => {
     current_lat: "0",
     current_lng: "0",
     mission_status: "new_mission",
+    sender_id: senderId,
+    recepient_id: recepientId,
     drone_id: 999,
   });
 
   publishDroneDiscoveryRequest(mission.id);
+
+  // await updateStations(mission)
 
   res.json({ id: mission.id });
 };
@@ -168,13 +182,13 @@ const updateMission = (req, res) => {
   res.send("mission updated successfully.");
 };
 
-const getMission = async (req, res) => {
+const getActiveMission = async (req, res) => {
   active_mission = await missions.findOne({
     where: { mission_status: { [Op.not]: "completed" } },
   });
 
   if (active_mission != null) res.json(active_mission);
-  else res.json({})
+  else res.json({});
 };
 
 const acknowledgeLoad = async (req, res) => {
@@ -184,7 +198,7 @@ const acknowledgeLoad = async (req, res) => {
     where: { mission_status: { [Op.not]: "completed" } },
   });
 
-  const flightPlan = generateFlightPlan(
+  const flightPlan = await generateFlightPlan(
     mission.source_station_id,
     mission.dest_station_id
   );
@@ -194,7 +208,7 @@ const acknowledgeLoad = async (req, res) => {
   mission.mission_status = "heading_dest";
   mission.save();
 
-  res.json({response: "Ok"});
+  res.json({ response: "Ok" });
 };
 
 const acknowledgeReceipt = async (req, res) => {
@@ -207,7 +221,7 @@ const acknowledgeReceipt = async (req, res) => {
   mission.mission_status = "completed";
   mission.save();
 
-  res.json({response: "Ok"});
+  res.json({ response: "Ok" });
 };
 
 const consumeMissionStatusUpdateEvent = async function (msg) {
@@ -237,7 +251,7 @@ const consumeMissionStatusUpdateEvent = async function (msg) {
 module.exports = {
   createMission,
   updateMission,
-  getMission,
+  getMission: getActiveMission,
   acknowledgeLoad,
   acknowledgeReceipt,
   consumeMissionStatusUpdateEvent,

@@ -1,0 +1,19 @@
+version: '3.3'
+
+services:
+  dds_be:
+    container_name: "dds_be"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - "dds_db"
+    ports:
+        - 3001:3001
+  dds_db:
+    image: "postgres"
+    environment:
+      POSTGRES_USER: 'postgres'
+      POSTGRES_PASSWORD: 'postgres'
+    ports:
+        - 5432:5432

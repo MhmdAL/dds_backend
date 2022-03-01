@@ -2,7 +2,7 @@ const db_models = require("./db_models");
 const { Sequelize } = require("sequelize");
 
 let sequelize = new Sequelize(
-  "postgres://postgres:postgres@localhost:5432/postgres"
+  "postgres://postgres:postgres@dds_db:5432/postgres"
 );
 
 async function init() {
@@ -13,7 +13,7 @@ async function init() {
   }
 
   sequelize = new Sequelize(
-    "postgres://postgres:postgres@localhost:5432/dds_db"
+    "postgres://postgres:postgres@dds_db:5432/dds_db"
   );
 
   try {
