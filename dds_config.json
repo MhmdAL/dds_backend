@@ -1,0 +1,4 @@
+{
+  "drone_altitude_in_meters": 3,
+  "recipient_unload_timeout_in_minutes": 5
+}

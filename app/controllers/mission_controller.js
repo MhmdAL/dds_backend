@@ -4,6 +4,7 @@ const mqtt = require("mqtt");
 const fs = require("fs");
 const path = require("path");
 const { Op } = require("sequelize/dist");
+const dds_config = require("../../dds_config.json")
 
 const options = {
   clean: true,
@@ -18,9 +19,9 @@ const client = mqtt.connect("mqtt://broker.emqx.io:1883", options);
 client.on("connect", function () {
   console.log("Connected");
 
-  client.subscribe("mission-status-update");
-  client.subscribe("drone-location-request-ack");
-  client.subscribe("drone-landed");
+  client.subscribe("drone-location-request-ack-event");
+  client.subscribe("drone-landed-event");
+  client.subscribe("flight-mission-completed-event");
 });
 
 client.on("message", async function (topic, message) {
@@ -28,41 +29,37 @@ client.on("message", async function (topic, message) {
 
   data = JSON.parse(message);
 
-  if (topic == "mission-status-update") {
-    console.log(data.status);
-    await missions.update(
-      {
-        mission_status: data.status,
-      },
-      {
-        where: {
-          id: data.id,
-        },
-      }
-    );
-  } else if (topic == "drone-location-request-ack") {
+  if (topic == "drone-location-request-ack-event") {
     onDroneLocationDiscovered(data);
-  } else if (topic == "drone-landed") {
+  } else if (topic == "drone-landed-event") {
     onDroneLanded(data);
+  } else if (topic == "flight-mission-completed-event") {
+    onFlightMissionFinished(data)
   }
 });
+
+async function findActiveMission() {
+  return await missions.findOne({
+    where: { mission_status: { [Op.not]: "completed" } },
+  });
+}
 
 function getPathBetween(source, dest) {
   // do some pathfinding magic to find movements
   return [{ x: dest.x - source.x, y: dest.y - source.y }];
 }
 
-async function generateFlightPlan(fromStationId, toStationId) {
+async function generateFlightPlan(fromStationId, toStationId, type) {
   const toStation = await stations.findByPk(toStationId);
 
-  let file = "plan.txt";
+  let file = `plan_${type}.txt`;
 
   const fpath = path.join(__dirname, file);
   let data = fs.readFileSync(fpath, "utf8");
 
   data = data.replace("{lat}", toStation.lat);
   data = data.replace("{lng}", toStation.lng);
-  data = data.replace("{alt}", 3);
+  data = data.replace("{alt}", dds_config.drone_altitude_in_meters);
 
   return data;
 }
@@ -79,33 +76,53 @@ function publishDroneDiscoveryRequest(mission_id) {
   client.publish("drone-location-request", JSON.stringify(data));
 }
 
+function publishLandRequest() {
+  client.publish("land-request", "{}");
+}
+
 async function updateStations(data) {
   const senderUser = await users.findByPk(data.sender_id)
-  const recipientUser = await users.findByPk(data.sender_id)
+  const recipientUser = await users.findByPk(data.recipient_id)
 
   client.publish(`station-update-${data.source_station_id}`, JSON.stringify({ expectedRfid: senderUser.rfid, stationType: 0 }))
   client.publish(`station-update-${data.dest_station_id}`, JSON.stringify({ expectedRfid: recipientUser.rfid, stationType: 1 }))
 }
 
+async function onFlightMissionFinished(data) {
+  console.log("flight mission completed");
+  const mission = await findActiveMission()
+
+  if (data.station_id == mission.dest_station_id && mission.mission_status == "heading_dest") {
+    mission.mission_status = "awaiting_recipient";
+  }
+
+  await mission.save()
+}
+
 async function onDroneLanded(data) {
   console.log("drone landed");
-  const mission = await missions.findOne({
-    where: { mission_status: { [Op.not]: "completed" } },
-  });
+  const mission = await findActiveMission()
 
-  if (mission.mission_status == "heading_source") {
+  if (data.station_id == mission.source_station_id && mission.mission_status == "heading_source") {
     mission.mission_status = "awaiting_load";
-  } else if (mission.mission_status == "heading_dest") {
+  } else if (data.station_id == mission.dest_station_id && mission.mission_status == "awaiting_recipient") {
     mission.mission_status = "awaiting_unload";
+
+    this.recipientUnloadTimer = setTimeout(() => { 
+      const mission = await findActiveMission()
+
+      mission.mission_status = "completed"
+      mission.save()
+    }, dds_config.recipient_unload_timeout_in_minutes)
   }
 
   await mission.save();
 }
 
 async function onDroneLocationDiscovered(data) {
-  const mission = await missions.findOne({
-    where: { mission_status: { [Op.not]: "completed" } },
-  });
+  const mission = await findActiveMission()
+
+  await updateStations(mission)
 
   console.log('drone found!!')
 
@@ -120,7 +137,8 @@ async function onDroneLocationDiscovered(data) {
 
   const flightPlan = await generateFlightPlan(
     data.station_id,
-    mission.source_station_id
+    mission.source_station_id,
+    "current2source"
   );
 
   publishMissionRequestEvent(flightPlan);
@@ -132,9 +150,7 @@ async function onDroneLocationDiscovered(data) {
 const createMission = async (req, res) => {
   const user = await users.findOne({ where: { fb_id: req.authenticatedUser.uid } })
 
-  const active_mission = await missions.findOne({
-    where: { mission_status: { [Op.not]: "completed" } },
-  });
+  const active_mission = await findActiveMission()
   if (active_mission && active_mission != null) {
     console.log("mission already in progress");
     res.send("mission already in progress");
@@ -159,8 +175,6 @@ const createMission = async (req, res) => {
 
   publishDroneDiscoveryRequest(mission.id);
 
-  // await updateStations(mission)
-
   res.json({ id: mission.id });
 };
 
@@ -183,9 +197,7 @@ const updateMission = (req, res) => {
 };
 
 const getActiveMission = async (req, res) => {
-  active_mission = await missions.findOne({
-    where: { mission_status: { [Op.not]: "completed" } },
-  });
+  active_mission = await findActiveMission()
 
   if (active_mission != null) res.json(active_mission);
   else res.json({});
@@ -194,13 +206,12 @@ const getActiveMission = async (req, res) => {
 const acknowledgeLoad = async (req, res) => {
   console.log("acking load");
 
-  const mission = await missions.findOne({
-    where: { mission_status: { [Op.not]: "completed" } },
-  });
+  const mission = await findActiveMission()
 
   const flightPlan = await generateFlightPlan(
     mission.source_station_id,
-    mission.dest_station_id
+    mission.dest_station_id,
+    "source2dest"
   );
 
   publishMissionRequestEvent(flightPlan);
@@ -211,41 +222,26 @@ const acknowledgeLoad = async (req, res) => {
   res.json({ response: "Ok" });
 };
 
-const acknowledgeReceipt = async (req, res) => {
-  console.log("acking receive");
+const acknowledgeRecipientArrived = async (req, res) => {
+  console.log("acking recipient");
 
-  const mission = await missions.findOne({
-    where: { mission_status: { [Op.not]: "completed" } },
-  });
-
-  mission.mission_status = "completed";
-  mission.save();
+  publishLandRequest();
 
   res.json({ response: "Ok" });
 };
 
-const consumeMissionStatusUpdateEvent = async function (msg) {
-  const content = msg.content.toString();
-  data = JSON.parse(content);
-  console.log("mission (%d) status: %s", data.id, data.status);
-  if (data.status == "finished") {
-    const mission = await missions.findOne({
-      where: {
-        id: data.id,
-      },
-    });
+const acknowledgeReceipt = async (req, res) => {
+  console.log("acking receive");
 
-    await drones.update(
-      {
-        is_occupied: false,
-      },
-      {
-        where: {
-          id: mission.drone_id,
-        },
-      }
-    );
-  }
+  const mission = await findActiveMission()
+
+  if(this.recipientUnloadTimer)
+    clearTimeout(this.recipientUnloadTimer);
+    
+  mission.mission_status = "completed";
+  mission.save();
+
+  res.json({ response: "Ok" });
 };
 
 module.exports = {
@@ -253,7 +249,7 @@ module.exports = {
   updateMission,
   getMission: getActiveMission,
   acknowledgeLoad,
+  acknowledgeRecipientArrived,
   acknowledgeReceipt,
-  consumeMissionStatusUpdateEvent,
   generateFlightPlan,
 };
