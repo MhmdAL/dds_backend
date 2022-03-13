@@ -45,6 +45,14 @@ const init_models = function (sequelize) {
       recepient_id: {
         type: DataTypes.STRING,
         allowNull: false
+      },
+      reached_dest_at: {
+        type: DataTypes.DATE,
+        allowNull: true
+      },
+      arrived_at: {
+        type: DataTypes.DATE,
+        allowNull: true
       }
     },
     {
@@ -129,6 +137,10 @@ const init_models = function (sequelize) {
       },
       rfid: {
         type: DataTypes.STRING,
+        allowNull: false
+      },
+      fpid: {
+        type: DataTypes.INTEGER,
         allowNull: false
       }
     },

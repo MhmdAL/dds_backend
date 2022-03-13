@@ -1,4 +1,5 @@
 const express = require("express");
+const cron = require('node-cron');
 var cors = require("cors");
 var {
   drone_controller,
@@ -13,6 +14,7 @@ fb_app = admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
 var firebaseAuth = require("firebase-admin/auth").getAuth();
+var firebaseMessaging = require("firebase-admin/messaging").getMessaging();
 const authMiddleWare = require("firebase-auth-express-middleware");
 
 const db = require("./database.js");
@@ -21,8 +23,41 @@ db.init()
 const app = express();
 const port = 3001;
 
+cron.schedule("* * * * *", mission_controller.returnTimedOutRecipientAwaitingDrones)
+cron.schedule("* * * * *", mission_controller.updateAwaitingUnloadMissions)
+
 app.use(express.json()); // for parsing application/json
 app.use(cors());
+
+app.post("/test_notif", async (req, res) => {
+  const registrationToken = 'fcDMPd-5St6tyEGJU-Eja5:APA91bE5e0VB3FIkFsBYpOb4ULOgTDpECjyFqY5I2CCh1UDnVDiu4ZLQd2OO1vNSCZrqJTCJI2u591iaLrz3S2-egYjOrrM0wlnEvtTnhv-3bIvzxRGZrxd9iRH_ylkUqAVLkgJgAZvy';
+
+  const message = {
+    android: {
+      notification: {
+        title: 'My Title',
+        body: 'TEST',
+        notification_priority: 'PRIORITY_HIGH',
+        color: '#FF0000'
+      },
+    },
+  
+    token: registrationToken
+  };
+
+  // Send a message to the device corresponding to the provided
+  // registration token.
+  firebaseMessaging.send(message)
+    .then((response) => {
+      // Response is a message ID string.
+      console.log('Successfully sent message:', response);
+    })
+    .catch((error) => {
+      console.log('Error sending message:', error);
+    });
+
+    res.send('ok')
+})
 
 // Misson Controller
 app.post("/start_mission", authMiddleWare.authn(firebaseAuth), mission_controller.createMission);

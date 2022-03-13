@@ -1,5 +1,4 @@
 const { missions, drones, stations, users } = require("../db_models").models;
-const axios = require("axios");
 const mqtt = require("mqtt");
 const fs = require("fs");
 const path = require("path");
@@ -14,7 +13,7 @@ const options = {
   password: "emqx_test",
 };
 
-const client = mqtt.connect("mqtt://broker.emqx.io:1883", options);
+const client = mqtt.connect("mqtt://192.168.100.27:1883", options);
 
 client.on("connect", function () {
   console.log("Connected");
@@ -22,6 +21,7 @@ client.on("connect", function () {
   client.subscribe("drone-location-request-ack-event");
   client.subscribe("drone-landed-event");
   client.subscribe("flight-mission-completed-event");
+  client.subscribe("acknowledge-recipient-event");
 });
 
 client.on("message", async function (topic, message) {
@@ -35,12 +35,14 @@ client.on("message", async function (topic, message) {
     onDroneLanded(data);
   } else if (topic == "flight-mission-completed-event") {
     onFlightMissionFinished(data)
+  } else if (topic == "acknowledge-recipient-event") {
+    ackRecipientArrived()
   }
 });
 
 async function findActiveMission() {
   return await missions.findOne({
-    where: { mission_status: { [Op.not]: "completed" } },
+    where: { mission_status: { [Op.notIn]: ["completed", "failed"] } },
   });
 }
 
@@ -65,13 +67,17 @@ async function generateFlightPlan(fromStationId, toStationId, type) {
 }
 
 function publishMissionRequestEvent(flightPlan) {
-  client.publish("mission-request", JSON.stringify({ planText: flightPlan }));
+  console.log('Publishing mission start request')
+
+  client.publish("start-mission-request", JSON.stringify({ planText: flightPlan }));
 }
 
 function publishDroneDiscoveryRequest(mission_id) {
   const data = {
     mission_id: mission_id,
   };
+
+  console.log('Publishing drone discovery request')
 
   client.publish("drone-location-request", JSON.stringify(data));
 }
@@ -82,52 +88,65 @@ function publishLandRequest() {
 
 async function updateStations(data) {
   const senderUser = await users.findByPk(data.sender_id)
-  const recipientUser = await users.findByPk(data.recipient_id)
+  const recipientUser = await users.findByPk(data.recepient_id)
 
-  client.publish(`station-update-${data.source_station_id}`, JSON.stringify({ expectedRfid: senderUser.rfid, stationType: 0 }))
-  client.publish(`station-update-${data.dest_station_id}`, JSON.stringify({ expectedRfid: recipientUser.rfid, stationType: 1 }))
+  client.publish(`station-update-${data.source_station_id}-request`, JSON.stringify({ expected_rfid: senderUser.rfid, expected_fpid: senderUser.fpid, stationType: 0 }))
+  client.publish(`station-update-${data.dest_station_id}-request`, JSON.stringify({ expected_rfid: recipientUser.rfid, expected_fpid: recipientUser.fpid, stationType: 1 }))
+}
+
+async function handleRecipientTimeout(mission) {
+  const flightPlan = await generateFlightPlan(
+    mission.dest_station_id,
+    mission.source_station_id,
+    "dest2source"
+  );
+
+  publishMissionRequestEvent(flightPlan)
+
+  mission.mission_status = "missing_recipient_heading_source"
+  mission.save()
 }
 
 async function onFlightMissionFinished(data) {
-  console.log("flight mission completed");
-  const mission = await findActiveMission()
+  console.log("Received drone reached destination event");
+
+  let mission = await findActiveMission()
 
   if (data.station_id == mission.dest_station_id && mission.mission_status == "heading_dest") {
     mission.mission_status = "awaiting_recipient";
+    mission.reached_dest_at = Date()
   }
 
   await mission.save()
 }
 
 async function onDroneLanded(data) {
-  console.log("drone landed");
+  console.log("Received drone landed event");
+
   const mission = await findActiveMission()
 
   if (data.station_id == mission.source_station_id && mission.mission_status == "heading_source") {
     mission.mission_status = "awaiting_load";
   } else if (data.station_id == mission.dest_station_id && mission.mission_status == "awaiting_recipient") {
     mission.mission_status = "awaiting_unload";
+  } else if (data.station_id == mission.source_station_id && mission.mission_status == "missing_recipient_heading_source") {
+    mission.mission_status = "failed"
 
-    this.recipientUnloadTimer = setTimeout(() => { 
-      const mission = await findActiveMission()
-
-      mission.mission_status = "completed"
-      mission.save()
-    }, dds_config.recipient_unload_timeout_in_minutes)
+    console.log('\n== Mission Failed! ==\n')
   }
 
   await mission.save();
 }
 
 async function onDroneLocationDiscovered(data) {
+  console.log('Received drone location ack event')
+
   const mission = await findActiveMission()
 
   await updateStations(mission)
 
-  console.log('drone found!!')
-
   if (data.station_id == mission.source_station_id) {
-    console.log("drone is already at the source. no need to send it there");
+    console.log("Drone is already at the source station; no need to send it there");
 
     mission.mission_status = "awaiting_load";
     await mission.save();
@@ -152,10 +171,12 @@ const createMission = async (req, res) => {
 
   const active_mission = await findActiveMission()
   if (active_mission && active_mission != null) {
-    console.log("mission already in progress");
-    res.send("mission already in progress");
+    console.log("A mission is already in progress; can't start a new mission.");
+    res.send("A mission is already in progress");
     return;
   }
+
+  console.log('\n== Mission Starting ==\n')
 
   const sourceStationId = req.body.source_station_id;
   const destStationId = req.body.dest_station_id;
@@ -203,6 +224,33 @@ const getActiveMission = async (req, res) => {
   else res.json({});
 };
 
+function calculateDistance(src, dest) {
+  // Haversine formula
+
+  const R = 6371e3;
+  const lat1Rad = src.lat * Math.PI / 180;
+  const lat2Rad = dest.lat * Math.PI / 180;
+  const deltaLat = (dest.lat - src.lat) * Math.PI / 180;
+  const deltaLon = (dest.lng - src.lng) * Math.PI / 180;
+
+  const a = Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+    Math.cos(lat1Rad) * Math.cos(lat2Rad) *
+    Math.sin(deltaLon / 2) * Math.sin(deltaLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+}
+
+async function calculateETA(fromStationId, toStationId) {
+  const fromStation = await stations.findByPk(fromStationId)
+  const toStation = await stations.findByPk(toStationId)
+
+  const distanceInMeters = calculateDistance({ lat: fromStation.lat, lng: fromStation.lng }, { lat: toStation.lat, lng: toStation.lng })
+
+  return distanceInMeters / dds_config.drone_speed_in_meters_per_sec
+}
+
 const acknowledgeLoad = async (req, res) => {
   console.log("acking load");
 
@@ -214,6 +262,12 @@ const acknowledgeLoad = async (req, res) => {
     "source2dest"
   );
 
+  const etaInSeconds = calculateETA(mission.source_station_id, mission.dest_station_id)
+
+  setTimeout(() => {
+    // TODO: send notification to recipient
+  }, etaInSeconds - 30); // notify recipient when there's 30 sec left till arrival
+
   publishMissionRequestEvent(flightPlan);
 
   mission.mission_status = "heading_dest";
@@ -222,10 +276,26 @@ const acknowledgeLoad = async (req, res) => {
   res.json({ response: "Ok" });
 };
 
+async function ackRecipientArrived() {
+  console.log('Received ack recipient message')
+
+  const mission = await findActiveMission()
+
+  if (mission.mission_status == 'awaiting_recipient') {
+    mission.mission_status = 'awaiting_unload'
+
+    mission.arrived_at = Date()
+
+    await mission.save()
+
+    publishLandRequest();
+  }
+}
+
 const acknowledgeRecipientArrived = async (req, res) => {
   console.log("acking recipient");
 
-  publishLandRequest();
+  await ackRecipientArrived()
 
   res.json({ response: "Ok" });
 };
@@ -235,14 +305,44 @@ const acknowledgeReceipt = async (req, res) => {
 
   const mission = await findActiveMission()
 
-  if(this.recipientUnloadTimer)
-    clearTimeout(this.recipientUnloadTimer);
-    
   mission.mission_status = "completed";
   mission.save();
 
+  console.log('\n== Mission Complete ==\n')
+
   res.json({ response: "Ok" });
 };
+
+async function returnTimedOutRecipientAwaitingDrones() {
+  console.log('Running job to return hovering drones')
+
+  const targetMissions = await missions.findAll({ where: { mission_status: "awaiting_recipient" } })
+
+  targetMissions.forEach(async function (mission) {
+    const timeDiffInMinutes = (Date.now() - Date.parse(mission.reached_dest_at)) / 60000
+
+    if (timeDiffInMinutes >= dds_config.recipient_arrival_timeout_in_minutes) {
+      handleRecipientTimeout(mission)
+    }
+  })
+}
+
+async function updateAwaitingUnloadMissions() {
+  console.log('Running job to update awaiting_unload to completed')
+
+  const targetMissions = await missions.findAll({ where: { mission_status: "awaiting_unload" } })
+
+  targetMissions.forEach(async function (mission) {
+    const timeDiffInMinutes = (Date.now() - Date.parse(mission.arrived_at)) / 60000
+
+    if (timeDiffInMinutes >= dds_config.recipient_unload_timeout_in_minutes) {
+      console.log('\n== Mission Complete ==\n')
+
+      mission.mission_status = "completed"
+      await mission.save()
+    }
+  })
+}
 
 module.exports = {
   createMission,
@@ -252,4 +352,6 @@ module.exports = {
   acknowledgeRecipientArrived,
   acknowledgeReceipt,
   generateFlightPlan,
+  returnTimedOutRecipientAwaitingDrones,
+  updateAwaitingUnloadMissions
 };

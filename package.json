@@ -17,6 +17,7 @@
     "firebase-admin": "^10.0.2",
     "firebase-auth-express-middleware": "^1.0.7",
     "mqtt": "^4.3.4",
+    "node-cron": "^3.0.0",
     "pg": "^8.7.1",
     "pg-hstore": "^2.3.4",
     "pg-promise": "^10.11.1",

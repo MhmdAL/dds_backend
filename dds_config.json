@@ -1,4 +1,6 @@
 {
-  "drone_altitude_in_meters": 3,
-  "recipient_unload_timeout_in_minutes": 5
+  "drone_altitude_in_meters": 1,
+  "recipient_unload_timeout_in_minutes": 0.5,
+  "recipient_arrival_timeout_in_minutes": 2,
+  "drone_speed_in_meters_per_sec": 15
 }

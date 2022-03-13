@@ -13,7 +13,7 @@ async function init() {
   }
 
   sequelize = new Sequelize(
-    "postgres://postgres:postgres@dds_db:5432/dds_db"
+    "postgres://postgres:postgres@dds_db:5432/dds_db", { logging: false }
   );
 
   try {

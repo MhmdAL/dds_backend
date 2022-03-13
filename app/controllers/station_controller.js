@@ -8,7 +8,6 @@ const createStation = async (req, res) => {
 
 const getStations = async (req, res) => {
   const response = await stations.findAll()
-  console.log(response)
 
   res.json({ data: response } );
 };
