@@ -46,6 +46,10 @@ const init_models = function (sequelize) {
         type: DataTypes.STRING,
         allowNull: false
       },
+      eta: {
+        type: DataTypes.DATE,
+        allowNull: true
+      },
       reached_dest_at: {
         type: DataTypes.DATE,
         allowNull: true
@@ -53,6 +57,11 @@ const init_models = function (sequelize) {
       arrived_at: {
         type: DataTypes.DATE,
         allowNull: true
+      },
+      arrival_notif_sent: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false,
+        allowNull: false
       }
     },
     {
@@ -127,13 +136,17 @@ const init_models = function (sequelize) {
         autoIncrement: true,
         primaryKey: true,
       },
-      fb_id: {
-        type: DataTypes.STRING,
-        allowNull: false,
-      },
       name: {
         type: DataTypes.STRING,
         allowNull: false
+      },
+      fbid: {
+        type: DataTypes.STRING,
+        allowNull: false,
+      },
+      reg_token: {
+        type: DataTypes.STRING,
+        allowNull: true,
       },
       rfid: {
         type: DataTypes.STRING,

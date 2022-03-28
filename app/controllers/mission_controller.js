@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const { Op } = require("sequelize/dist");
 const dds_config = require("../../dds_config.json")
+const notification_service = require('../services/notification_service')
 
 const options = {
   clean: true,
@@ -167,7 +168,7 @@ async function onDroneLocationDiscovered(data) {
 }
 
 const createMission = async (req, res) => {
-  const user = await users.findOne({ where: { fb_id: req.authenticatedUser.uid } })
+  const user = await users.findOne({ where: { fbid: req.authenticatedUser.uid } })
 
   const active_mission = await findActiveMission()
   if (active_mission && active_mission != null) {
@@ -248,7 +249,9 @@ async function calculateETA(fromStationId, toStationId) {
 
   const distanceInMeters = calculateDistance({ lat: fromStation.lat, lng: fromStation.lng }, { lat: toStation.lat, lng: toStation.lng })
 
-  return distanceInMeters / dds_config.drone_speed_in_meters_per_sec
+  console.log(`Distance (m) between station ${fromStationId} and ${toStationId} is ${distanceInMeters}`)
+
+  return distanceInMeters / dds_config.drone_speed_in_meters_per_sec + 2 * dds_config.takeoff_time_in_seconds
 }
 
 const acknowledgeLoad = async (req, res) => {
@@ -262,16 +265,18 @@ const acknowledgeLoad = async (req, res) => {
     "source2dest"
   );
 
-  const etaInSeconds = calculateETA(mission.source_station_id, mission.dest_station_id)
+  const etaInSeconds = await calculateETA(mission.source_station_id, mission.dest_station_id)
 
-  setTimeout(() => {
-    // TODO: send notification to recipient
-  }, etaInSeconds - 30); // notify recipient when there's 30 sec left till arrival
+  var date = new Date();
+  console.log('Mission ETA: ' + etaInSeconds)
+  date.setSeconds(date.getSeconds() + etaInSeconds)
 
+  mission.eta = date
+  
   publishMissionRequestEvent(flightPlan);
 
   mission.mission_status = "heading_dest";
-  mission.save();
+  await mission.save();
 
   res.json({ response: "Ok" });
 };
@@ -313,6 +318,33 @@ const acknowledgeReceipt = async (req, res) => {
   res.json({ response: "Ok" });
 };
 
+async function handleSendingNotification(mission) {
+  const recipient = await users.findByPk(mission.recepient_id)
+
+  console.log(`Sending notification to user ${recipient.id}`)
+
+  notification_service.sendNotif(recipient.reg_token, 'Package arriving', 'Your package will arrive soon.')
+
+  mission.arrival_notif_sent = true
+
+  await mission.save()
+}
+
+async function notifyRecipientsAlmostThere() {
+  console.log('Running job to notify recipients that drone almost arrived')
+
+  const targetMissions = await missions.findAll({ where: { mission_status: "heading_dest" } })
+
+  targetMissions.forEach(async function (mission) {
+    const timeDiffInSeconds = (Date.parse(mission.eta) - Date.now()) / 1000
+
+    if (!mission.arrival_notif_sent && timeDiffInSeconds <= dds_config.recipient_eta_notification_time) {
+      handleSendingNotification(mission)
+    }
+  })
+
+}
+
 async function returnTimedOutRecipientAwaitingDrones() {
   console.log('Running job to return hovering drones')
 
@@ -353,5 +385,6 @@ module.exports = {
   acknowledgeReceipt,
   generateFlightPlan,
   returnTimedOutRecipientAwaitingDrones,
-  updateAwaitingUnloadMissions
+  updateAwaitingUnloadMissions,
+  notifyRecipientsAlmostThere
 };
