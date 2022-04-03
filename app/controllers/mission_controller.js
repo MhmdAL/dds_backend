@@ -14,7 +14,7 @@ const options = {
   password: "emqx_test",
 };
 
-const client = mqtt.connect("mqtt://192.168.100.27:1883", options);
+const client = mqtt.connect(`mqtt://${dds_config.broker_url}`, options);
 
 client.on("connect", function () {
   console.log("Connected");
