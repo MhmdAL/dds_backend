@@ -105,10 +105,6 @@ const init_models = function (sequelize) {
         autoIncrement: true,
         primaryKey: true,
       },
-      ip: {
-        type: DataTypes.STRING,
-        allowNull: false,
-      },
       lat: {
         type: DataTypes.DECIMAL,
         allowNull: false,

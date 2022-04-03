@@ -23,12 +23,13 @@ db.init()
 const app = express();
 const port = 3001;
 
-cron.schedule("*/15 * * * *", mission_controller.returnTimedOutRecipientAwaitingDrones)
-cron.schedule("*/15 * * * *", mission_controller.updateAwaitingUnloadMissions)
+cron.schedule("*/15 * * * * *", mission_controller.returnTimedOutRecipientAwaitingDrones)
+cron.schedule("*/15 * * * * *", mission_controller.updateAwaitingUnloadMissions)
 cron.schedule("*/5 * * * * *", mission_controller.notifyRecipientsAlmostThere)
 
 app.use(express.json()); // for parsing application/json
 app.use(cors());
+
 
 app.post("/test_notif", async (req, res) => {
   // notif.sendNotif()

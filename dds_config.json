@@ -1,4 +1,6 @@
 {
+  "broker_url": "192.168.100.27:1883",
+
   "drone_altitude_in_meters": 0,
   "recipient_unload_timeout_in_minutes": 0.1,
   "recipient_arrival_timeout_in_minutes": 0.5,
