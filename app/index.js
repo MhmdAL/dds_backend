@@ -40,7 +40,7 @@ app.post("/test_notif", async (req, res) => {
 // Misson Controller
 app.post("/start_mission", authMiddleWare.authn(firebaseAuth), mission_controller.createMission);
 // app.put("/update_mission", mission_controller.updateMission);
-app.get("/mission", mission_controller.getMission);
+app.get("/mission", authMiddleWare.authn(firebaseAuth), mission_controller.getMission);
 app.post("/ack_package_loaded", mission_controller.acknowledgeLoad);
 app.post("/ack_recipient_arrived", mission_controller.acknowledgeRecipientArrived);
 app.post("/ack_package_received", mission_controller.acknowledgeReceipt);

@@ -219,10 +219,15 @@ const updateMission = (req, res) => {
 };
 
 const getActiveMission = async (req, res) => {
-  active_mission = await findActiveMission()
+  const user = await users.findOne({ where: { fbid: req.authenticatedUser.uid } })
 
-  if (active_mission != null) res.json(active_mission);
-  else res.json({});
+  const active_mission = await findActiveMission()
+
+  if (active_mission != null && (user.id == active_mission.sender_id || user.id == active_mission.recepient_id)) {
+    return res.json(active_mission);
+  }
+
+  return res.json({})
 };
 
 function calculateDistance(src, dest) {
@@ -272,7 +277,7 @@ const acknowledgeLoad = async (req, res) => {
   date.setSeconds(date.getSeconds() + etaInSeconds)
 
   mission.eta = date
-  
+
   publishMissionRequestEvent(flightPlan);
 
   mission.mission_status = "heading_dest";
