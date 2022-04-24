@@ -48,6 +48,7 @@ app.post("/ack_package_received", mission_controller.acknowledgeReceipt);
 // Station Controller
 app.get("/station", station_controller.getStations);
 app.post("/station", station_controller.createStation);
+app.post("/path", station_controller.setPath);
 
 // Drone Controller
 app.post("/drone", drone_controller.createDrone);

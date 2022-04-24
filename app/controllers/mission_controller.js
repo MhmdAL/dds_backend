@@ -5,6 +5,8 @@ const path = require("path");
 const { Op } = require("sequelize/dist");
 const dds_config = require("../../dds_config.json")
 const notification_service = require('../services/notification_service')
+const getPathBetween = require("../services/pathfinder").getPathBetween
+const calculateETA = require("../utils").calculateETA
 
 const options = {
   clean: true,
@@ -47,24 +49,27 @@ async function findActiveMission() {
   });
 }
 
-function getPathBetween(source, dest) {
-  // do some pathfinding magic to find movements
-  return [{ x: dest.x - source.x, y: dest.y - source.y }];
-}
-
 async function generateFlightPlan(fromStationId, toStationId, type) {
+  const fromStation = await stations.findByPk(fromStationId);
   const toStation = await stations.findByPk(toStationId);
 
-  let file = `plan_${type}.txt`;
+  const flightPath = getPathBetween(fromStation, toStation);
 
-  const fpath = path.join(__dirname, file);
-  let data = fs.readFileSync(fpath, "utf8");
+  let instructionIdx = 0
+  let flightPlanText = "QGC WPL 120\n"
+  if (type == "current2source" || type == "source2dest") {
+    flightPlanText += `${instructionIdx++}\t1\t3\t22\t0.0\t0.0\t0.0\t0.0\t0.0\t0.0\t${dds_config.drone_altitude_in_meters}\t1\n`
+  }
 
-  data = data.replace("{lat}", toStation.lat);
-  data = data.replace("{lng}", toStation.lng);
-  data = data.replace("{alt}", dds_config.drone_altitude_in_meters);
+  flightPath.forEach((coord) => {
+    flightPlanText += `${instructionIdx++}\t1\t3\t16\t0.0\t0.0\t0.0\t0.0\t${coord[0]}\t${coord[1]}\t${dds_config.drone_altitude_in_meters}\t1\n`
+  })
 
-  return data;
+  if (type == "current2source" || type == "dest2source") {
+    flightPlanText += `${instructionIdx++}\t1\t3\t21\t0.0\t0.0\t0.0\t0.0\t0.0\t0.0\t0.0\t1\n`
+  }
+
+  return flightPlanText;
 }
 
 function publishMissionRequestEvent(flightPlan) {
@@ -74,38 +79,23 @@ function publishMissionRequestEvent(flightPlan) {
 }
 
 function publishDroneDiscoveryRequest(mission_id) {
-  const data = {
-    mission_id: mission_id,
-  };
-
   console.log('Publishing drone discovery request')
 
-  client.publish("drone-location-request", JSON.stringify(data));
+  client.publish("drone-location-request", JSON.stringify({ mission_id: mission_id }));
 }
 
 function publishLandRequest() {
+  console.log('Publishing drone land request')
+
   client.publish("land-request", "{}");
 }
 
-async function updateStations(data) {
+async function publishStationUpdateRequest(data) {
   const senderUser = await users.findByPk(data.sender_id)
   const recipientUser = await users.findByPk(data.recepient_id)
 
   client.publish(`station-update-${data.source_station_id}-request`, JSON.stringify({ expected_rfid: senderUser.rfid, expected_fpid: senderUser.fpid, stationType: 0 }))
   client.publish(`station-update-${data.dest_station_id}-request`, JSON.stringify({ expected_rfid: recipientUser.rfid, expected_fpid: recipientUser.fpid, stationType: 1 }))
-}
-
-async function handleRecipientTimeout(mission) {
-  const flightPlan = await generateFlightPlan(
-    mission.dest_station_id,
-    mission.source_station_id,
-    "dest2source"
-  );
-
-  publishMissionRequestEvent(flightPlan)
-
-  mission.mission_status = "missing_recipient_heading_source"
-  mission.save()
 }
 
 async function onFlightMissionFinished(data) {
@@ -144,7 +134,7 @@ async function onDroneLocationDiscovered(data) {
 
   const mission = await findActiveMission()
 
-  await updateStations(mission)
+  await publishStationUpdateRequest(mission)
 
   if (data.station_id == mission.source_station_id) {
     console.log("Drone is already at the source station; no need to send it there");
@@ -230,35 +220,6 @@ const getActiveMission = async (req, res) => {
   return res.json({})
 };
 
-function calculateDistance(src, dest) {
-  // Haversine formula
-
-  const R = 6371e3;
-  const lat1Rad = src.lat * Math.PI / 180;
-  const lat2Rad = dest.lat * Math.PI / 180;
-  const deltaLat = (dest.lat - src.lat) * Math.PI / 180;
-  const deltaLon = (dest.lng - src.lng) * Math.PI / 180;
-
-  const a = Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
-    Math.cos(lat1Rad) * Math.cos(lat2Rad) *
-    Math.sin(deltaLon / 2) * Math.sin(deltaLon / 2);
-
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  return R * c;
-}
-
-async function calculateETA(fromStationId, toStationId) {
-  const fromStation = await stations.findByPk(fromStationId)
-  const toStation = await stations.findByPk(toStationId)
-
-  const distanceInMeters = calculateDistance({ lat: fromStation.lat, lng: fromStation.lng }, { lat: toStation.lat, lng: toStation.lng })
-
-  console.log(`Distance (m) between station ${fromStationId} and ${toStationId} is ${distanceInMeters}`)
-
-  return distanceInMeters / dds_config.drone_speed_in_meters_per_sec + 2 * dds_config.takeoff_time_in_seconds
-}
-
 const acknowledgeLoad = async (req, res) => {
   console.log("acking load");
 
@@ -270,13 +231,18 @@ const acknowledgeLoad = async (req, res) => {
     "source2dest"
   );
 
-  const etaInSeconds = await calculateETA(mission.source_station_id, mission.dest_station_id)
+  const fromStation = await stations.findByPk(mission.source_station_id)
+  const toStation = await stations.findByPk(mission.dest_station_id)
+
+  const etaInSeconds = await calculateETA(fromStation, toStation)
 
   var date = new Date();
   console.log('Mission ETA: ' + etaInSeconds)
   date.setSeconds(date.getSeconds() + etaInSeconds)
 
   mission.eta = date
+
+  publishStationUpdateRequest(mission);
 
   publishMissionRequestEvent(flightPlan);
 
@@ -322,6 +288,19 @@ const acknowledgeReceipt = async (req, res) => {
 
   res.json({ response: "Ok" });
 };
+
+async function handleRecipientTimeout(mission) {
+  const flightPlan = await generateFlightPlan(
+    mission.dest_station_id,
+    mission.source_station_id,
+    "dest2source"
+  );
+
+  publishMissionRequestEvent(flightPlan)
+
+  mission.mission_status = "missing_recipient_heading_source"
+  mission.save()
+}
 
 async function handleSendingNotification(mission) {
   const recipient = await users.findByPk(mission.recepient_id)

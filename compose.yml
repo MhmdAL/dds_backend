@@ -6,6 +6,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    volumes:
+      - ~/paths:/dds_app/app/data
     depends_on:
       - "dds_db"
     ports:
@@ -17,3 +19,8 @@ services:
       POSTGRES_PASSWORD: 'postgres'
     ports:
         - 5432:5432
+  mqtt_broker:
+    image: hivemq/hivemq4
+    ports:
+        - 8080:8080
+        - 1883:1883

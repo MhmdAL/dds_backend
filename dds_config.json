@@ -1,9 +1,9 @@
 {
-  "broker_url": "192.168.100.27:1883",
+  "broker_url": "broker.hivemq.com:1883",
 
-  "drone_altitude_in_meters": 0,
+  "drone_altitude_in_meters": 5,
   "recipient_unload_timeout_in_minutes": 0.1,
-  "recipient_arrival_timeout_in_minutes": 0.5,
+  "recipient_arrival_timeout_in_minutes": 3,
   "recipient_eta_notification_time": 6,
   "drone_speed_in_meters_per_sec": 15,
   "takeoff_time_in_seconds": 10
